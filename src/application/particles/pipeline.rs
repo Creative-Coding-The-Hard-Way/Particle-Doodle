@@ -28,44 +28,6 @@ pub fn create_graphics_pipeline(
     swapchain_extent: [u32; 2],
     render_pass: &Arc<DynRenderPass>,
 ) -> Result<Arc<dyn GraphicsPipelineAbstract + Send + Sync>> {
-    mod vertex_shader {
-        //
-        vulkano_shaders::shader! {
-            ty: "vertex",
-            src: r#"
-            #version 450
-            #extension GL_ARB_separate_shader_objects : enable
-
-            layout(location = 0) in vec2 pos;
-            layout(location = 1) in vec4 color;
-
-            layout(location = 0) out vec4 vertColor;
-
-            void main() {
-                vertColor = color;
-                gl_Position = vec4(pos, 0.0, 1.0);
-            }
-            "#
-        }
-    }
-
-    mod fragment_shader {
-        vulkano_shaders::shader! {
-            ty: "fragment",
-            src: r#"
-            #version 450
-            #extension GL_ARB_separate_shader_objects : enable
-
-            layout(location = 0) in vec4 fragColor;
-            layout(location = 0) out vec4 outColor;
-
-            void main() {
-               outColor = fragColor;
-            }
-            "#
-        }
-    }
-
     let vert = vertex_shader::Shader::load(device.clone())
         .context("unable to load the vertex shader")?;
     let frag = fragment_shader::Shader::load(device.clone())
@@ -86,11 +48,10 @@ pub fn create_graphics_pipeline(
         .depth_clamp(false)
         .polygon_mode_fill()
         .line_width(1.0)
-        .cull_mode_disabled()
-        .front_face_clockwise()
         .depth_write(false)
         .sample_shading_disabled()
-        .blend_pass_through()
+        .blend_alpha_blending()
+        .point_list()
         .render_pass(
             Subpass::from(render_pass.clone(), 0)
                 .context("could not create the pipeline subpass")?,
@@ -99,4 +60,43 @@ pub fn create_graphics_pipeline(
         .context("could not create the graphics pipeline")?;
 
     Ok(Arc::new(pipeline))
+}
+
+mod vertex_shader {
+    //
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        src: r#"
+            #version 450
+            #extension GL_ARB_separate_shader_objects : enable
+
+            layout(location = 0) in vec2 pos;
+            layout(location = 1) in vec4 color;
+
+            layout(location = 0) out vec4 vertColor;
+
+            void main() {
+                vertColor = color;
+                gl_PointSize = 64.0;
+                gl_Position = vec4(pos, 0.0, 1.0);
+            }
+            "#
+    }
+}
+
+mod fragment_shader {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        src: r#"
+            #version 450
+            #extension GL_ARB_separate_shader_objects : enable
+
+            layout(location = 0) in vec4 fragColor;
+            layout(location = 0) out vec4 outColor;
+
+            void main() {
+               outColor = fragColor;
+            }
+            "#
+    }
 }

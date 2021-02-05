@@ -10,12 +10,24 @@ use std::fmt::Write as FmtWrite;
 use textwrap::{termwidth, Options};
 
 fn main() -> Result<()> {
+    let result = run();
+    if let Err(ref error) = result {
+        log::error!(
+            "Application exited unsuccessfully!\n{:?}\n\nroot cause: {:?}",
+            error,
+            error.root_cause()
+        );
+    }
+    result
+}
+
+fn run() -> Result<()> {
     Logger::with_env_or_str("info")
         .format(multiline_format)
         .start()?;
+
     let app = Application::initialize()?;
-    app.main_loop()?;
-    Ok(())
+    app.main_loop()
 }
 
 /// A formatting function for lines which automaticaly wrap on the terminal

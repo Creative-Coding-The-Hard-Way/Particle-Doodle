@@ -1,32 +1,16 @@
+mod particles;
+
+use crate::display::Display;
 use anyhow::{Context, Result};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use vulkano::buffer::cpu_pool::CpuBufferPool;
-use vulkano::command_buffer::{
-    AutoCommandBuffer, AutoCommandBufferBuilder, DynamicState,
-};
-use vulkano::format::ClearValue;
-use vulkano::pipeline::GraphicsPipelineAbstract;
-use vulkano::swapchain::acquire_next_image;
-use vulkano::sync::GpuFuture;
+use particles::Particles;
+use std::f32::consts::PI;
+use std::time::Instant;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::ControlFlow;
 
-use crate::display::Display;
-
-mod triangle_pipeline;
-
-use triangle_pipeline::Vertex;
-
 pub struct Application {
-    // vulkan display resources
     display: Display,
-
-    pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
-
-    // vertex buffers
-    buffer_pool: CpuBufferPool<[Vertex; 3]>,
-
+    particles: Particles,
     start: Instant,
 }
 
@@ -34,128 +18,44 @@ impl Application {
     pub fn initialize() -> Result<Self> {
         let display =
             Display::create().context("unable to create the display")?;
-        let pipeline = triangle_pipeline::create_graphics_pipeline(
-            &display.device,
-            display.swapchain.dimensions(),
-            &display.render_pass,
-        )?;
-        let buffer_pool = CpuBufferPool::vertex_buffer(display.device.clone());
+        let particles = Particles::new(&display)?;
 
         Ok(Self {
             display,
-            pipeline,
-            buffer_pool,
+            particles,
             start: Instant::now(),
         })
     }
 
-    fn build_command_buffer(
-        &self,
-        framebuffer_index: usize,
-    ) -> AutoCommandBuffer {
-        let family = self.display.graphics_queue.family();
-        let framebuffer_image =
-            &self.display.framebuffer_images[framebuffer_index];
+    /// Update the application
+    fn update(&mut self) -> Result<()> {
+        let t = (Instant::now() - self.start).as_secs_f32();
+        let step = 2.0 * PI / 3.0;
+        let a1 = step + t;
+        let a2 = step * 2.0 + t;
+        let a3 = step * 3.0 + t;
 
-        let vertices =
-            Arc::new(self.buffer_pool.next(self.triangle_vertices()).unwrap());
+        self.particles.vertices = vec![
+            particles::Vertex::new([a1.cos(), a1.sin()], [1.0, 0.0, 0.0, 1.0]),
+            particles::Vertex::new([a2.cos(), a2.sin()], [0.0, 1.0, 0.0, 1.0]),
+            particles::Vertex::new([a3.cos(), a3.sin()], [0.0, 0.0, 1.0, 1.0]),
+        ];
 
-        let mut builder = AutoCommandBufferBuilder::primary_simultaneous_use(
-            self.display.device.clone(),
-            family,
-        )
-        .unwrap();
-
-        builder
-            .begin_render_pass(
-                framebuffer_image.clone(),
-                vulkano::command_buffer::SubpassContents::Inline,
-                vec![
-                    ClearValue::Float([0.0, 0.0, 0.0, 1.0]),
-                    ClearValue::Float([0.0, 0.0, 0.0, 1.0]),
-                ],
-            )
-            .unwrap()
-            .draw(
-                self.pipeline.clone(),
-                &DynamicState::none(),
-                vec![vertices.clone()],
-                (),
-                (),
-            )
-            .unwrap()
-            .end_render_pass()
-            .unwrap();
-
-        builder.build().unwrap()
+        // no-op
+        Ok(())
     }
 
-    fn triangle_vertices(&self) -> [Vertex; 3] {
-        let time: Duration = Instant::now().duration_since(self.start);
-        let t = time.as_secs_f32() / 10.0;
-        let offset = (2.0 * 3.1415) / 3.0;
-
-        [
-            Vertex::new(
-                [(offset * 0.0 + t).cos(), (offset * 0.0 + t).sin()],
-                [1.0, 0.0, 0.0, 1.0],
-            ),
-            Vertex::new(
-                [(offset * 1.0 + t).cos(), (offset * 1.0 + t).sin()],
-                [1.0, 0.0, 0.0, 1.0],
-            ),
-            Vertex::new(
-                [(offset * 2.0 + t).cos(), (offset * 2.0 + t).sin()],
-                [1.0, 0.0, 0.0, 1.0],
-            ),
-        ]
-    }
-
-    /**
-     * Render the screen.
-     */
+    /// Draw the screen.
     fn render(&mut self) -> Result<()> {
-        let (image_index, suboptimal, acquire_swapchain_future) =
-            acquire_next_image(self.display.swapchain.clone(), None)
-                .with_context(|| {
-                    "unable to acquire next frame for rendering"
-                })?;
-
-        let command_buffer = self.build_command_buffer(image_index);
-
-        let future = acquire_swapchain_future
-            .then_execute(self.display.graphics_queue.clone(), command_buffer)
-            .with_context(|| "unable to execute the display command buffer")?
-            .then_swapchain_present(
-                self.display.present_queue.clone(),
-                self.display.swapchain.clone(),
-                image_index,
-            )
-            .then_signal_fence_and_flush()
-            .with_context(|| "unable to present, signal, and flush")?;
-
-        // wait for the frame to finish
-        future.wait(None).with_context(|| {
-            "error while waiting for the frame to complete!"
-        })?;
-
-        if suboptimal {
-            self.rebuild_swapchain_resources()?;
-        }
-
+        let particle_draw_commands = self.particles.draw(&self.display)?;
+        self.display.render(vec![particle_draw_commands])?;
         Ok(())
     }
 
     /// Rebuild the swapchain and command buffers
     fn rebuild_swapchain_resources(&mut self) -> Result<()> {
-        log::debug!("rebuilding swapchain resources");
-        self.display.rebuild_swapchain();
-        self.pipeline = triangle_pipeline::create_graphics_pipeline(
-            &self.display.device,
-            self.display.swapchain.dimensions(),
-            &self.display.render_pass,
-        )
-        .context("unable to rebuild the triangle pipeline")?;
+        self.display.rebuild_swapchain()?;
+        self.particles.rebuild_swapchain_resources(&self.display)?;
         Ok(())
     }
 
@@ -200,15 +100,17 @@ impl Application {
                     Ok(_) => {}
                 },
 
-                Event::MainEventsCleared => match self.render() {
-                    Err(error) => {
-                        log::error!("unable to render the frame {}", error);
-                        *control_flow = ControlFlow::Exit;
+                Event::MainEventsCleared => {
+                    match self.update().and_then(|_| self.render()) {
+                        Err(error) => {
+                            log::error!("unable to render the frame {}", error);
+                            *control_flow = ControlFlow::Exit;
+                        }
+                        Ok(_) => {
+                            self.display.surface.window().request_redraw();
+                        }
                     }
-                    Ok(_) => {
-                        self.display.surface.window().request_redraw();
-                    }
-                },
+                }
 
                 _ => (),
             }

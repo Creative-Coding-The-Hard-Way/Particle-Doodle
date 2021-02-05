@@ -112,13 +112,13 @@ fn check_device_feature_support(device: &PhysicalDevice) -> bool {
     device
         .supported_features()
         .intersection(&required_device_features())
-        .tessellation_shader
+        .large_points
 }
 
 /// Yield the set of required features
 fn required_device_features() -> Features {
     Features {
-        tessellation_shader: true,
+        large_points: true,
         ..Features::none()
     }
 }
