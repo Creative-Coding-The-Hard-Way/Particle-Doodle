@@ -1,17 +1,23 @@
+mod kinematic_particle;
 mod particles;
 
 use crate::display::Display;
 use anyhow::{Context, Result};
+use kinematic_particle::Particle;
 use particles::Particles;
-use std::f32::consts::PI;
 use std::time::Instant;
-use winit::event::{Event, WindowEvent};
-use winit::event_loop::ControlFlow;
+use winit::{
+    event::{ElementState, Event, MouseButton, WindowEvent},
+    event_loop::ControlFlow,
+};
+
+type Vec2 = nalgebra::Vector2<f32>;
 
 pub struct Application {
     display: Display,
     particles: Particles,
-    start: Instant,
+    last_update: Instant,
+    kinematic: Vec<Particle>,
 }
 
 impl Application {
@@ -23,25 +29,49 @@ impl Application {
         Ok(Self {
             display,
             particles,
-            start: Instant::now(),
+            last_update: Instant::now(),
+            kinematic: vec![Particle::at([0.0, 0.0].into())],
         })
     }
 
-    /// Update the application
-    fn update(&mut self) -> Result<()> {
-        let t = (Instant::now() - self.start).as_secs_f32();
-        let step = 2.0 * PI / 3.0;
-        let a1 = step + t;
-        let a2 = step * 2.0 + t;
-        let a3 = step * 3.0 + t;
+    fn spawn_particles(&mut self) {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
 
-        self.particles.vertices = vec![
-            particles::Vertex::new([a1.cos(), a1.sin()], [1.0, 0.0, 0.0, 1.0]),
-            particles::Vertex::new([a2.cos(), a2.sin()], [0.0, 1.0, 0.0, 1.0]),
-            particles::Vertex::new([a3.cos(), a3.sin()], [0.0, 0.0, 1.0, 1.0]),
-        ];
+        let mut new_particles = (0..50)
+            .into_iter()
+            .map(|_| Particle::at([0.0, 0.0].into()))
+            .map(|mut particle| {
+                particle.vel.x = rng.gen_range(-1.0..1.0);
+                particle.vel.y = rng.gen_range(-1.0..1.0);
+                particle
+            })
+            .collect::<Vec<Particle>>();
+        self.kinematic.append(&mut new_particles);
+    }
 
-        // no-op
+    /// Tick the application state based on the wall-clock time since the
+    /// last tick.
+    fn tick(&mut self, time: f32) -> Result<()> {
+        for particle in &mut self.kinematic {
+            particle.acc = -2.0 * particle.pos
+                + particle.pos.yx().component_mul(&Vec2::new(1.0, -1.0));
+            particle.integrate(time);
+        }
+        self.kinematic = self
+            .kinematic
+            .iter()
+            .filter(|particle| particle.lifetime <= 10.0)
+            .copied()
+            .collect();
+
+        self.particles.vertices = self
+            .kinematic
+            .iter()
+            .copied()
+            .map(|p| particles::Vertex::from(p))
+            .collect();
+
         Ok(())
     }
 
@@ -57,6 +87,19 @@ impl Application {
         self.display.rebuild_swapchain()?;
         self.particles.rebuild_swapchain_resources(&self.display)?;
         Ok(())
+    }
+
+    /// Update the application, only tick once every 15 milliseconds
+    fn update(&mut self) -> Result<()> {
+        const TICK_MILLIS: u128 = 15;
+        let duration = Instant::now() - self.last_update;
+        if duration.as_millis() >= TICK_MILLIS {
+            self.tick(duration.as_secs_f32())?;
+            self.last_update = Instant::now();
+            Ok(())
+        } else {
+            Ok(())
+        }
     }
 
     /**
@@ -84,6 +127,18 @@ impl Application {
                     ..
                 } => {
                     *control_flow = ControlFlow::Exit;
+                }
+
+                Event::WindowEvent {
+                    event:
+                        WindowEvent::MouseInput {
+                            button: MouseButton::Left,
+                            state: ElementState::Released,
+                            ..
+                        },
+                    ..
+                } => {
+                    self.spawn_particles();
                 }
 
                 Event::WindowEvent {

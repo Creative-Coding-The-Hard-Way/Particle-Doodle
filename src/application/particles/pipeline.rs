@@ -1,13 +1,19 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use vulkano::device::Device;
-use vulkano::framebuffer::{RenderPassAbstract, Subpass};
-use vulkano::impl_vertex;
-use vulkano::pipeline::{
-    viewport::Viewport, GraphicsPipeline, GraphicsPipelineAbstract,
+use vulkano::{
+    buffer::{BufferUsage, ImmutableBuffer},
+    descriptor::{descriptor_set::PersistentDescriptorSet, DescriptorSet},
+    device::{Device, Queue},
+    framebuffer::{RenderPassAbstract, Subpass},
+    impl_vertex,
+    pipeline::{
+        viewport::Viewport, GraphicsPipeline, GraphicsPipelineAbstract,
+    },
+    sync::GpuFuture,
 };
 
 type DynRenderPass = dyn RenderPassAbstract + Send + Sync;
+pub type Transform = vertex_shader::ty::Transform;
 
 #[derive(Default, Debug, Copy, Clone)]
 pub struct Vertex {
@@ -21,6 +27,37 @@ impl Vertex {
     pub fn new(pos: [f32; 2], color: [f32; 4]) -> Self {
         Self { pos, color }
     }
+}
+
+/// Create a transform descriptor set for the pipeline using the data in the
+/// transform object.
+pub fn create_transform_descriptor_set(
+    pipeline: &Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
+    graphics_queue: &Arc<Queue>,
+    transform: Transform,
+) -> Result<Arc<dyn DescriptorSet + Send + Sync>> {
+    let (uniform_buffer, future) = ImmutableBuffer::from_data(
+        transform,
+        BufferUsage::uniform_buffer(),
+        graphics_queue.clone(),
+    )
+    .context("unable to create the uniform buffer")?;
+    future
+        .then_signal_fence_and_flush() // wait for the GPU to finish the operation
+        .context("error while waiting for uniform buffer to be written")?
+        .wait(None) // wait for the CPU to hear about it
+        .context("uniform buffer timeout")?;
+
+    let layout = pipeline
+        .descriptor_set_layout(0)
+        .context("unable to get the pipeline's transform descriptor set")?;
+    Ok(Arc::new(
+        PersistentDescriptorSet::start(layout.clone())
+            .add_buffer(uniform_buffer)
+            .context("unable to bind the transform buffer")?
+            .build()
+            .context("unable to build the persistent descriptor set")?,
+    ))
 }
 
 pub fn create_graphics_pipeline(
@@ -47,7 +84,6 @@ pub fn create_graphics_pipeline(
         .viewports(vec![viewport])
         .depth_clamp(false)
         .polygon_mode_fill()
-        .line_width(1.0)
         .depth_write(false)
         .sample_shading_disabled()
         .blend_alpha_blending()
@@ -63,7 +99,6 @@ pub fn create_graphics_pipeline(
 }
 
 mod vertex_shader {
-    //
     vulkano_shaders::shader! {
         ty: "vertex",
         src: r#"
@@ -75,10 +110,14 @@ mod vertex_shader {
 
             layout(location = 0) out vec4 vertColor;
 
+            layout(set = 0, binding = 0) uniform Transform {
+                mat4 projection;
+            } ubo;
+
             void main() {
                 vertColor = color;
-                gl_PointSize = 64.0;
-                gl_Position = vec4(pos, 0.0, 1.0);
+                gl_PointSize = 10.0;
+                gl_Position = ubo.projection * vec4(pos, 0.0, 1.0);
             }
             "#
     }

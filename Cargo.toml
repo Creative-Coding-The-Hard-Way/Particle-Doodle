@@ -15,8 +15,10 @@ vulkano = "*"
 vulkano-shaders = "0.20.0"
 vulkano-win = "0.20.0"
 winit = "0.24.0"
+nalgebra = "0.24.1"
+rand = "0.8.3"
 
 [dependencies.textwrap]
-textwrap = "0.13.2"
+version = "0.13.2"
 features = ["terminal_size"]
 

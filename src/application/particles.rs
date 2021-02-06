@@ -1,14 +1,20 @@
-use crate::display::Display;
-use anyhow::{Context, Result};
-use std::sync::Arc;
-use vulkano::command_buffer::{
-    AutoCommandBuffer, AutoCommandBufferBuilder, DynamicState,
-};
-use vulkano::pipeline::GraphicsPipelineAbstract;
-use vulkano::{buffer::cpu_pool::CpuBufferPool, framebuffer::Subpass};
-
 mod pipeline;
 
+use crate::display::Display;
+use anyhow::{Context, Result};
+use pipeline::Transform;
+use std::sync::Arc;
+use vulkano::{
+    buffer::cpu_pool::CpuBufferPool,
+    command_buffer::{
+        AutoCommandBuffer, AutoCommandBufferBuilder, DynamicState,
+    },
+    descriptor::descriptor_set::DescriptorSet,
+    framebuffer::Subpass,
+    pipeline::GraphicsPipelineAbstract,
+};
+
+type Mat4 = nalgebra::Matrix4<f32>;
 pub type Vertex = pipeline::Vertex;
 
 pub struct Particles {
@@ -17,7 +23,9 @@ pub struct Particles {
     // vertex buffers
     vertex_buffer_pool: CpuBufferPool<Vertex>,
 
-    // vertices
+    // pipeline descriptor for the screen transform
+    descriptor_set: Arc<dyn DescriptorSet + Send + Sync>,
+
     pub vertices: Vec<Vertex>,
 }
 
@@ -32,14 +40,20 @@ impl Particles {
         let vertex_buffer_pool =
             CpuBufferPool::vertex_buffer(display.device.clone());
 
+        let transform = Transform {
+            projection: Mat4::identity().into(),
+        };
+        let descriptor_set = pipeline::create_transform_descriptor_set(
+            &pipeline,
+            &display.graphics_queue,
+            transform,
+        )?;
+
         Ok(Self {
             pipeline,
             vertex_buffer_pool,
-            vertices: vec![
-                Vertex::new([0.0, -0.5], [1.0, 1.0, 1.0, 1.0]),
-                Vertex::new([0.5, 0.5], [0.0, 0.0, 1.0, 1.0]),
-                Vertex::new([-0.5, 0.5], [0.0, 1.0, 0.0, 1.0]),
-            ],
+            descriptor_set,
+            vertices: vec![],
         })
     }
 
@@ -52,6 +66,28 @@ impl Particles {
             display.swapchain.dimensions(),
             &display.render_pass,
         )?;
+
+        const WORLD_SIZE: f32 = 4.0;
+        let [width, height] = display.swapchain.dimensions();
+        let aspect = width as f32 / height as f32;
+        let world_width = aspect * WORLD_SIZE;
+        let transform = Transform {
+            projection: Mat4::new_orthographic(
+                -world_width / 2.0,
+                world_width / 2.0,
+                WORLD_SIZE / 2.0,
+                -WORLD_SIZE / 2.0,
+                1.0,
+                -1.0,
+            )
+            .into(),
+        };
+        self.descriptor_set = pipeline::create_transform_descriptor_set(
+            &self.pipeline,
+            &display.graphics_queue,
+            transform,
+        )?;
+
         Ok(())
     }
 
@@ -75,7 +111,7 @@ impl Particles {
                 self.pipeline.clone(),
                 &DynamicState::none(),
                 vec![vertex_buffer],
-                (),
+                self.descriptor_set.clone(),
                 (),
             )
             .with_context(|| "unable to issue draw command")?;
