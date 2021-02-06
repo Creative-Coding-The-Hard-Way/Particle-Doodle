@@ -41,6 +41,7 @@ pub struct Display {
     pub device: Arc<Device>,
     pub graphics_queue: Arc<Queue>,
     pub present_queue: Arc<Queue>,
+    pub compute_queue: Arc<Queue>,
 }
 
 impl Display {
@@ -62,7 +63,7 @@ impl Display {
         let physical_device =
             device::pick_physical_device(&surface, &instance)?;
 
-        let (device, graphics_queue, present_queue) =
+        let (device, graphics_queue, present_queue, compute_queue) =
             device::create_logical_device(&surface, &physical_device)?;
         let (swapchain, swapchain_images) = swapchain::create_swap_chain(
             &surface,
@@ -99,6 +100,7 @@ impl Display {
             device,
             graphics_queue,
             present_queue,
+            compute_queue,
         })
     }
 

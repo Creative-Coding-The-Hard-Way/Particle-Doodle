@@ -13,7 +13,7 @@ use queue_family_indices::QueueFamilyIndices;
 pub fn create_logical_device(
     surface: &Arc<Surface<Window>>,
     physical_device: &PhysicalDevice,
-) -> Result<(Arc<Device>, Arc<Queue>, Arc<Queue>)> {
+) -> Result<(Arc<Device>, Arc<Queue>, Arc<Queue>, Arc<Queue>)> {
     let indices = QueueFamilyIndices::find(surface, &physical_device)?;
     let unique_indices = indices.unique_indices();
 
@@ -30,9 +30,10 @@ pub fn create_logical_device(
     )
     .context("unable to build logical device")?;
 
-    let (graphics_queue, present_queue) = indices.take_queues(queues)?;
+    let (graphics_queue, present_queue, compute_queue) =
+        indices.take_queues(queues)?;
 
-    Ok((device, graphics_queue, present_queue))
+    Ok((device, graphics_queue, present_queue, compute_queue))
 }
 
 /// Take the first suitable physical device
