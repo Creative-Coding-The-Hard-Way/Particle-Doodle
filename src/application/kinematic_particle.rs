@@ -1,5 +1,3 @@
-use crate::application::particles::Vertex;
-
 type Vec2 = nalgebra::Vector2<f32>;
 
 const MAX_VEL: f32 = 5.0;
@@ -45,18 +43,4 @@ impl Particle {
         }
         self.vel *= DAMPING;
     }
-}
-
-impl From<Particle> for Vertex {
-    fn from(particle: Particle) -> Self {
-        let nvel = particle.vel.norm() / MAX_VEL;
-        let r = lerp(nvel, 0.1, 0.6);
-        let g = lerp(nvel, 0.1, 0.6);
-        let b = lerp(nvel, 0.7, 1.0);
-        Vertex::new(particle.pos.into(), [r, g, b, 1.0])
-    }
-}
-
-fn lerp(x: f32, min: f32, max: f32) -> f32 {
-    x * max + (1.0 - x) * min
 }

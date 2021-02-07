@@ -52,27 +52,8 @@ impl Application {
 
     /// Tick the application state based on the wall-clock time since the
     /// last tick.
-    fn tick(&mut self, time: f32) -> Result<()> {
-        for particle in &mut self.kinematic {
-            particle.acc = -2.0 * particle.pos
-                + particle.pos.yx().component_mul(&Vec2::new(1.0, -1.0));
-            particle.integrate(time);
-        }
-        self.kinematic = self
-            .kinematic
-            .iter()
-            .filter(|particle| particle.lifetime <= 10.0)
-            .copied()
-            .collect();
-
-        self.particles.vertices = self
-            .kinematic
-            .iter()
-            .copied()
-            .map(|p| particles::Vertex::from(p))
-            .collect();
-
-        Ok(())
+    fn tick(&mut self, _time: f32) -> Result<()> {
+        self.particles.tick(&self.display)
     }
 
     /// Draw the screen.

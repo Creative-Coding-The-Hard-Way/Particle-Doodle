@@ -95,15 +95,15 @@ fn is_device_suitable(
 /// Check that the device supports all of the required extensions
 fn check_device_extension_support(device: &PhysicalDevice) -> bool {
     let extensions = DeviceExtensions::supported_by_device(*device);
-    extensions
-        .intersection(&required_device_extensions())
-        .khr_swapchain
+    let supported = extensions.intersection(&required_device_extensions());
+    supported.khr_swapchain && supported.khr_storage_buffer_storage_class
 }
 
 /// Yield the set of required device extensions
 fn required_device_extensions() -> DeviceExtensions {
     DeviceExtensions {
         khr_swapchain: true,
+        khr_storage_buffer_storage_class: true,
         ..DeviceExtensions::none()
     }
 }

@@ -5,28 +5,26 @@ use anyhow::{Context, Result};
 use pipeline::Transform;
 use std::sync::Arc;
 use vulkano::{
-    buffer::cpu_pool::CpuBufferPool,
+    buffer::{BufferAccess, BufferUsage, ImmutableBuffer},
     command_buffer::{
         AutoCommandBuffer, AutoCommandBufferBuilder, DynamicState,
     },
     descriptor::descriptor_set::DescriptorSet,
     framebuffer::Subpass,
-    pipeline::GraphicsPipelineAbstract,
+    pipeline::{vertex::BufferlessVertices, ComputePipelineAbstract},
+    sync::GpuFuture,
 };
 
 type Mat4 = nalgebra::Matrix4<f32>;
-pub type Vertex = pipeline::Vertex;
 
 pub struct Particles {
-    pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
-
-    // vertex buffers
-    vertex_buffer_pool: CpuBufferPool<Vertex>,
-
-    // pipeline descriptor for the screen transform
+    pipeline: Arc<pipeline::ConcreteGraphicsPipeline>,
     descriptor_set: Arc<dyn DescriptorSet + Send + Sync>,
 
-    pub vertices: Vec<Vertex>,
+    compute_pipeline: Arc<dyn ComputePipelineAbstract + Send + Sync>,
+    compute_descriptor_set: Arc<dyn DescriptorSet + Send + Sync>,
+
+    vertex_buffer: Arc<dyn BufferAccess + Send + Sync>,
 }
 
 impl Particles {
@@ -37,8 +35,7 @@ impl Particles {
             &display.render_pass,
         )?;
 
-        let vertex_buffer_pool =
-            CpuBufferPool::vertex_buffer(display.device.clone());
+        let vertex_buffer = Self::initialize_vertices(display)?;
 
         let transform = Transform {
             projection: Mat4::identity().into(),
@@ -46,15 +43,55 @@ impl Particles {
         let descriptor_set = pipeline::create_transform_descriptor_set(
             &pipeline,
             &display.graphics_queue,
+            &vertex_buffer,
             transform,
+        )?;
+
+        let compute_pipeline =
+            pipeline::create_compute_pipeline(&display.device)?;
+        let compute_descriptor_set = pipeline::create_compute_descriptor_set(
+            &compute_pipeline,
+            &vertex_buffer,
         )?;
 
         Ok(Self {
             pipeline,
-            vertex_buffer_pool,
             descriptor_set,
-            vertices: vec![],
+            compute_pipeline,
+            compute_descriptor_set,
+            vertex_buffer,
         })
+    }
+
+    fn initialize_vertices(
+        display: &Display,
+    ) -> Result<Arc<dyn BufferAccess + Send + Sync>> {
+        let max = 1024 * 64;
+        let step = 2.0 * std::f32::consts::PI / max as f32;
+        let vertices = (0..max).map(|i| {
+            let angle = i as f32 * step;
+            pipeline::compute_shader::ty::Vertex {
+                pos: [angle.cos(), angle.sin()],
+                vel: [-angle.sin(), angle.cos()],
+                //..pipeline::compute_shader::ty::Vertex::default()
+            }
+        });
+
+        let (buffer, future) = ImmutableBuffer::from_iter(
+            vertices,
+            BufferUsage::all(),
+            display.compute_queue.clone(),
+        )
+        .context("unable to build vertex buffer for compute")?;
+        future
+            .then_signal_fence_and_flush()
+            .context("unable to upload vertex data for initialization")?
+            .wait(None)
+            .context(
+                "interruped while waiting for vertex upload to complete",
+            )?;
+
+        Ok(Arc::new(buffer))
     }
 
     pub fn rebuild_swapchain_resources(
@@ -85,18 +122,49 @@ impl Particles {
         self.descriptor_set = pipeline::create_transform_descriptor_set(
             &self.pipeline,
             &display.graphics_queue,
+            &self.vertex_buffer,
             transform,
         )?;
 
         Ok(())
     }
 
-    pub fn draw(&self, display: &Display) -> Result<AutoCommandBuffer> {
-        let vertex_buffer = Arc::new(
-            self.vertex_buffer_pool
-                .chunk(self.vertices.iter().cloned())?,
-        );
+    pub fn tick(&self, display: &Display) -> Result<()> {
+        let mut builder = AutoCommandBufferBuilder::primary_one_time_submit(
+            display.device.clone(),
+            display.compute_queue.family(),
+        )
+        .with_context(|| {
+            "unable to create the compute command buffer builder"
+        })?;
+        builder
+            .dispatch(
+                [1024, 1, 1],
+                self.compute_pipeline.clone(),
+                self.compute_descriptor_set.clone(),
+                (),
+            )
+            .with_context(|| "unable to dispatch the compute pipeline")?;
+        let commands = builder
+            .build()
+            .with_context(|| "unable to build the comput command buffer")?;
 
+        vulkano::sync::now(display.device.clone())
+            .then_execute(display.compute_queue.clone(), commands)
+            .with_context(|| "unable to execute compute commands")?
+            .then_signal_fence_and_flush()
+            .with_context(|| {
+                "error while waiting for the compute pipeline to execute"
+            })?
+            .wait(None)
+            .with_context(|| {
+                "error while waiting for the cpu to be notified"
+            })?;
+
+        Ok(())
+    }
+
+    pub fn draw(&self, display: &Display) -> Result<AutoCommandBuffer> {
         let mut builder =
             AutoCommandBufferBuilder::secondary_graphics_one_time_submit(
                 display.device.clone(),
@@ -106,12 +174,16 @@ impl Particles {
                 )?,
             )
             .with_context(|| "unable to create the command buffer builder")?;
+        let vertices = BufferlessVertices {
+            vertices: 1024 * 64,
+            instances: 1,
+        };
         builder
             .draw(
                 self.pipeline.clone(),
                 &DynamicState::none(),
-                vec![vertex_buffer],
-                self.descriptor_set.clone(),
+                vertices,
+                vec![self.descriptor_set.clone()],
                 (),
             )
             .with_context(|| "unable to issue draw command")?;
