@@ -3,6 +3,7 @@ mod pipeline;
 use crate::display::Display;
 use anyhow::{Context, Result};
 use pipeline::Transform;
+use rand::{thread_rng, Rng};
 use std::sync::Arc;
 use vulkano::{
     buffer::{BufferAccess, BufferUsage, ImmutableBuffer},
@@ -16,6 +17,7 @@ use vulkano::{
 };
 
 type Mat4 = nalgebra::Matrix4<f32>;
+pub type PushConstants = pipeline::PushConstants;
 
 pub struct Particles {
     pipeline: Arc<pipeline::ConcreteGraphicsPipeline>,
@@ -63,17 +65,29 @@ impl Particles {
         })
     }
 
+    pub fn reset_vertices(&mut self, display: &Display) -> Result<()> {
+        self.vertex_buffer = Self::initialize_vertices(display)?;
+        self.rebuild_swapchain_resources(display)?;
+        self.compute_descriptor_set = pipeline::create_compute_descriptor_set(
+            &self.compute_pipeline,
+            &self.vertex_buffer,
+        )?;
+        Ok(())
+    }
+
     fn initialize_vertices(
         display: &Display,
     ) -> Result<Arc<dyn BufferAccess + Send + Sync>> {
-        let max = 1024 * 64;
+        let mut rng = thread_rng();
+        let max = 262144 * 64;
         let step = 2.0 * std::f32::consts::PI / max as f32;
         let vertices = (0..max).map(|i| {
+            let radius = rng.gen_range(0.2..1.0);
             let angle = i as f32 * step;
             pipeline::compute_shader::ty::Vertex {
-                pos: [angle.cos(), angle.sin()],
-                vel: [-angle.sin(), angle.cos()],
-                //..pipeline::compute_shader::ty::Vertex::default()
+                pos: [radius * angle.cos(), radius * angle.sin()],
+                vel: [0.0, 0.0],
+                ..Default::default()
             }
         });
 
@@ -104,7 +118,7 @@ impl Particles {
             &display.render_pass,
         )?;
 
-        const WORLD_SIZE: f32 = 4.0;
+        const WORLD_SIZE: f32 = 2.0;
         let [width, height] = display.swapchain.dimensions();
         let aspect = width as f32 / height as f32;
         let world_width = aspect * WORLD_SIZE;
@@ -129,7 +143,11 @@ impl Particles {
         Ok(())
     }
 
-    pub fn tick(&self, display: &Display) -> Result<()> {
+    pub fn tick(
+        &self,
+        display: &Display,
+        push_constants: PushConstants,
+    ) -> Result<()> {
         let mut builder = AutoCommandBufferBuilder::primary_one_time_submit(
             display.device.clone(),
             display.compute_queue.family(),
@@ -139,10 +157,10 @@ impl Particles {
         })?;
         builder
             .dispatch(
-                [1024, 1, 1],
+                [262144, 1, 1],
                 self.compute_pipeline.clone(),
                 self.compute_descriptor_set.clone(),
-                (),
+                push_constants,
             )
             .with_context(|| "unable to dispatch the compute pipeline")?;
         let commands = builder
@@ -175,7 +193,7 @@ impl Particles {
             )
             .with_context(|| "unable to create the command buffer builder")?;
         let vertices = BufferlessVertices {
-            vertices: 1024 * 64,
+            vertices: 262144 * 64,
             instances: 1,
         };
         builder

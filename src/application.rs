@@ -1,14 +1,16 @@
-mod kinematic_particle;
 mod particles;
 
 use crate::display::Display;
 use anyhow::{Context, Result};
-use kinematic_particle::Particle;
 use particles::Particles;
 use std::time::Instant;
 use winit::{
-    event::{ElementState, Event, MouseButton, WindowEvent},
+    event::{
+        ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode,
+        WindowEvent,
+    },
     event_loop::ControlFlow,
+    window::Fullscreen,
 };
 
 type Vec2 = nalgebra::Vector2<f32>;
@@ -17,7 +19,9 @@ pub struct Application {
     display: Display,
     particles: Particles,
     last_update: Instant,
-    kinematic: Vec<Particle>,
+    screen_dims: Vec2,
+    mouse: Vec2,
+    pressed: bool,
 }
 
 impl Application {
@@ -30,30 +34,22 @@ impl Application {
             display,
             particles,
             last_update: Instant::now(),
-            kinematic: vec![Particle::at([0.0, 0.0].into())],
+            screen_dims: [1.0, 1.0].into(),
+            mouse: [0.0, 0.0].into(),
+            pressed: false,
         })
-    }
-
-    fn spawn_particles(&mut self) {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-
-        let mut new_particles = (0..50)
-            .into_iter()
-            .map(|_| Particle::at([0.0, 0.0].into()))
-            .map(|mut particle| {
-                particle.vel.x = rng.gen_range(-1.0..1.0);
-                particle.vel.y = rng.gen_range(-1.0..1.0);
-                particle
-            })
-            .collect::<Vec<Particle>>();
-        self.kinematic.append(&mut new_particles);
     }
 
     /// Tick the application state based on the wall-clock time since the
     /// last tick.
-    fn tick(&mut self, _time: f32) -> Result<()> {
-        self.particles.tick(&self.display)
+    fn tick(&mut self, time: f32) -> Result<()> {
+        let constants = particles::PushConstants {
+            enabled: if self.pressed { 1 } else { 0 },
+            attractor: self.mouse.into(),
+            timestep: time,
+            ..Default::default()
+        };
+        self.particles.tick(&self.display, constants)
     }
 
     /// Draw the screen.
@@ -67,6 +63,11 @@ impl Application {
     fn rebuild_swapchain_resources(&mut self) -> Result<()> {
         self.display.rebuild_swapchain()?;
         self.particles.rebuild_swapchain_resources(&self.display)?;
+
+        let [width, height] = self.display.swapchain.dimensions();
+        self.screen_dims.x = width as f32;
+        self.screen_dims.y = height as f32;
+
         Ok(())
     }
 
@@ -98,6 +99,10 @@ impl Application {
         self.render()
             .context("unable to render the first application frame")?;
         self.display.surface.window().set_visible(true);
+        self.display
+            .surface
+            .window()
+            .set_fullscreen(Some(Fullscreen::Borderless(None)));
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
@@ -111,15 +116,55 @@ impl Application {
                 }
 
                 Event::WindowEvent {
+                    event: WindowEvent::CursorMoved { position, .. },
+                    ..
+                } => {
+                    let world_width = self.screen_dims.x / self.screen_dims.y;
+                    self.mouse.y =
+                        lerp(position.y as f32 / self.screen_dims.y, 1.0, -1.0);
+                    self.mouse.x = lerp(
+                        position.x as f32 / self.screen_dims.x,
+                        -world_width,
+                        world_width,
+                    );
+                }
+
+                Event::WindowEvent {
+                    event:
+                        WindowEvent::KeyboardInput {
+                            input:
+                                KeyboardInput {
+                                    state: ElementState::Released,
+                                    virtual_keycode: Some(VirtualKeyCode::Space),
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                } => match self.particles.reset_vertices(&self.display) {
+                    Err(error) => {
+                        log::error!(
+                            "problem while reseting vertices {:?}",
+                            error
+                        );
+                        *control_flow = ControlFlow::Exit;
+                    }
+                    _ => {}
+                },
+
+                Event::WindowEvent {
                     event:
                         WindowEvent::MouseInput {
                             button: MouseButton::Left,
-                            state: ElementState::Released,
+                            state,
                             ..
                         },
                     ..
                 } => {
-                    self.spawn_particles();
+                    self.pressed = match state {
+                        ElementState::Pressed => true,
+                        ElementState::Released => false,
+                    }
                 }
 
                 Event::WindowEvent {
@@ -148,8 +193,12 @@ impl Application {
                     }
                 }
 
-                _ => (),
+                _ => {}
             }
         });
     }
+}
+
+fn lerp(x: f32, min: f32, max: f32) -> f32 {
+    x * max + (1.0 - x) * min
 }

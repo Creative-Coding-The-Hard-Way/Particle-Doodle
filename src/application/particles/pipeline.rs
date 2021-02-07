@@ -8,12 +8,9 @@ use vulkano::{
     },
     device::{Device, Queue},
     framebuffer::{RenderPassAbstract, Subpass},
-    impl_vertex,
     pipeline::{
-        vertex::{BufferlessDefinition, BufferlessVertices},
-        viewport::Viewport,
-        ComputePipeline, ComputePipelineAbstract, GraphicsPipeline,
-        GraphicsPipelineAbstract,
+        vertex::BufferlessDefinition, viewport::Viewport, ComputePipeline,
+        ComputePipelineAbstract, GraphicsPipeline,
     },
     sync::GpuFuture,
 };
@@ -25,6 +22,7 @@ pub type ConcreteGraphicsPipeline = GraphicsPipeline<
 >;
 type DynRenderPass = dyn RenderPassAbstract + Send + Sync;
 pub type Transform = vertex_shader::ty::Transform;
+pub type PushConstants = compute_shader::ty::PushConstants;
 
 /// Create a transform descriptor set for the pipeline using the data in the
 /// transform object.
@@ -136,6 +134,7 @@ mod vertex_shader {
         src: r#"
             #version 450
             #extension GL_ARB_separate_shader_objects : enable
+            #define MAX_VEL 5.0
 
             layout(location = 0) out vec4 vertColor;
 
@@ -154,7 +153,9 @@ mod vertex_shader {
 
             void main() {
                 Vertex vertex = data.vertices[gl_VertexIndex];
-                vertColor = vec4(vertex.vel, 0.0, 1.0);
+                float scale = length(vertex.vel) / MAX_VEL;
+                float inv = 1.0 - scale;
+                vertColor = vec4(inv/4.0, inv/3.0, scale, 0.1);
                 gl_Position = ubo.projection * vec4(vertex.pos, 0.0, 1.0);
             }
             "#
@@ -184,6 +185,9 @@ pub mod compute_shader {
         types_meta: { #[derive(Copy, Clone, Default)] },
         src: r#"
         #version 450
+        #define eps 0.1
+        #define damping (0.98)
+        #define MAX_VEL 5.0
 
         layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -196,10 +200,43 @@ pub mod compute_shader {
             Vertex vertices[];
         } data;
 
+        layout(push_constant) uniform PushConstants {
+            bool enabled;
+            vec2 attractor;
+            float timestep;
+        } pc;
+
+        vec2 clamp_to_bounds(vec2 pos) {
+            return vec2(
+                clamp(pos.x, -2.0, 2.0),
+                clamp(pos.y, -1.0, 1.0)
+            );
+        }
+
+        vec2 clamp_velocity(vec2 vel) {
+            if (dot(vel, vel) > MAX_VEL*MAX_VEL) {
+                return normalize(vel)*MAX_VEL;
+            }
+            else {
+                return vel;
+            }
+        }
+
         void main() {
             uint idx = gl_GlobalInvocationID.x;
             Vertex vertex = data.vertices[idx];
-            vertex.pos += vertex.vel * (1.0/60.0);
+
+            if (pc.enabled) {
+                vec2 diff = pc.attractor - vertex.pos;
+                vec2 dir = normalize(diff);
+                vec2 acceleration = dir / (dot(diff, diff) + eps);
+                vertex.vel += acceleration * pc.timestep;
+            }
+            vertex.vel = clamp_velocity(vertex.vel);
+            vertex.vel *= damping;
+            vertex.pos += vertex.vel * pc.timestep;
+            vertex.pos = clamp_to_bounds(vertex.pos);
+
             data.vertices[idx] = vertex;
        }
         "#
