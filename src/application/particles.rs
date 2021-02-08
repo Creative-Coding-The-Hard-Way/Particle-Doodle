@@ -79,7 +79,7 @@ impl Particles {
         display: &Display,
     ) -> Result<Arc<dyn BufferAccess + Send + Sync>> {
         let mut rng = thread_rng();
-        let max = 262144 * 64;
+        let max = 131072 * 64;
         let step = 2.0 * std::f32::consts::PI / max as f32;
         let vertices = (0..max).map(|i| {
             let radius = rng.gen_range(0.2..1.0);
@@ -157,7 +157,7 @@ impl Particles {
         })?;
         builder
             .dispatch(
-                [262144, 1, 1],
+                [131072, 1, 1],
                 self.compute_pipeline.clone(),
                 self.compute_descriptor_set.clone(),
                 push_constants,
@@ -193,7 +193,7 @@ impl Particles {
             )
             .with_context(|| "unable to create the command buffer builder")?;
         let vertices = BufferlessVertices {
-            vertices: 262144 * 64,
+            vertices: 131072 * 64,
             instances: 1,
         };
         builder
